@@ -1,0 +1,19 @@
+/* 收起左侧目录：侧边栏宽度变量清零 正文留白和顶栏偏移会跟着变 */
+:root.hide-sidebar {
+  --vp-sidebar-width: 0px;
+}
+
+:root.hide-sidebar .VPSidebar {
+  display: none;
+}
+
+/* 收起右侧本页目录：正文占满剩下的宽度 */
+@media (min-width: 80rem) {
+  :root.hide-aside .VPDoc.has-aside .aside {
+    display: none;
+  }
+
+  :root.hide-aside .VPDoc.has-aside .content-container {
+    max-width: none;
+  }
+}
