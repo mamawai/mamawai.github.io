@@ -31,7 +31,8 @@ export default defineConfig({
       {
         text: 'Java 并发',
         items: [
-          { text: 'synchronized 锁升级', link: '/java/concurrency/synchronized-lock-upgrade' }
+          { text: 'synchronized 锁升级与工作流程', link: '/java/concurrency/synchronized-lock-upgrade' },
+          { text: 'synchronized 版本演进', link: '/java/concurrency/synchronized-versions' }
         ]
       }
     ],
