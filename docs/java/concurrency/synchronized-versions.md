@@ -243,6 +243,8 @@ flowchart TB
   OLD ~~~ NEW
 ```
 
+表是按对象的 hash 查的。对象还没算过 hash 的话，膨胀前会先给它装上一个（`ObjectSynchronizer::inflate_fast_locked_object`）。所以严格说，膨胀可能会补写对象头里的 hash，但不会把原内容挤走。
+
 为什么要把 monitor 挪进表里：
 
 - 以前膨胀后，monitor 地址会把对象头原内容挤走。紧凑对象头里类型指针也在 Mark Word 里，挤走以后连"这个对象是什么类型"都要绕到 monitor 去读，容易出错（JDK-8315884）
