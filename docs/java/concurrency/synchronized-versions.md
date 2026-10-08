@@ -10,7 +10,7 @@
 
 ## 先看结论
 
-- **JDK 6 ~ 14**：无锁 → 偏向锁 → 轻量级锁 → 重量级锁，常见面试题说的就是这一版
+- **JDK 6 ~ 14**：无锁 → 偏向锁 → 轻量级锁 → 重量级锁，大多数资料讲的就是这一版
 - **JDK 15 ~ 22**：偏向锁默认关闭，变成无锁 → 轻量级锁 → 重量级锁
 - **JDK 23 ~ 26**：还是三段，但轻量级锁换了新实现，加锁只改对象头的 2 个锁标志位
 - **JDK 27**：紧凑对象头默认开启，膨胀后的 monitor 默认不再写进对象头，而是放进一张单独的表
@@ -36,7 +36,7 @@ flowchart LR
 | 22 | `LockingMode` 转为正式参数 | JDK-8315061 |
 | 23 | 默认改用新轻量级锁；支持连续重入 | JDK-8319251、JDK-8319796 |
 | 24 | `LockingMode` 废弃；新增 ObjectMonitorTable（默认关，开启后轻量级锁膨胀前先自旋）；删除 `_Responsible` 线程；虚拟线程不再被 synchronized 钉住；紧凑对象头（实验） | JDK-8334299、JDK-8315884、JDK-8320318、JEP 491、JEP 450 |
-| 25 | 紧凑对象头转正（默认关）；monitor 的两条等待队列合并成一条，改成先来先叫醒 | JEP 519、JDK-8343840 |
+| 25 | 紧凑对象头转正（默认关）；monitor 的两条等锁队列合并成一条，改为先到先唤醒 | JEP 519、JDK-8343840 |
 | 26 | `LockingMode` 被忽略，传统栈锁代码删除 | JDK-8359437 |
 | 27 | 默认开启紧凑对象头和 ObjectMonitorTable，轻量级锁膨胀前默认先自旋 | JEP 534、JDK-8379782 |
 | 28 | （开发中）计划删除 `UseObjectMonitorTable` 参数和"对象头存 monitor 地址"的代码 | JDK-8389325 |
@@ -100,7 +100,7 @@ stateDiagram-v2
 
 1. **偏向锁省掉的是 CAS**：第一次加锁用 CAS 写入线程指针，之后同一个线程进出同步块只读一下对象头比较，不写内存。
 2. **无锁态加轻量级锁，每次进出都要 CAS**：退出时对象头恢复成无锁，不会记住上次是谁，下次还得再 CAS。所以"同一线程反复进入无锁对象"不等于变相的偏向锁。
-3. **撤销偏向很贵**：别的线程来抢、或者计算了对象的原始 hash（`Object.hashCode()` / `System.identityHashCode()`，对象头放不下线程指针和 hash 两样东西），都要撤销偏向。JDK 13 及以前要进入安全点暂停所有线程，JDK 14 起改用只针对持有偏向的那个线程的 handshake。
+3. **撤销偏向代价高**：别的线程来抢、或者计算了对象的原始 hash（`Object.hashCode()` / `System.identityHashCode()`，对象头放不下线程指针和 hash 两样东西），都要撤销偏向。JDK 13 及以前要进入安全点暂停所有线程，JDK 14 起改用只针对持有偏向的那个线程的 handshake。
 4. **轻量级锁不自旋**：CAS 失败直接膨胀。自适应自旋发生在膨胀后的 ObjectMonitor 里，见 JDK 8 源码 `ObjectSynchronizer::slow_enter`。
 
 ### 为什么要取消偏向锁
@@ -147,7 +147,7 @@ sequenceDiagram
   B->>O: CAS 改成 0<br>表示膨胀中
   Note over B: 拷出原 Mark Word<br>放进新 ObjectMonitor
   B->>O: 写入 monitor 地址 10
-  B->>B: 自旋抢不到<br>排队 park
+  B->>B: 自旋失败<br>排队 park
   A->>O: 解锁 CAS 失败
   A->>B: 走重量级解锁<br>唤醒 B
 ```
@@ -166,7 +166,7 @@ sequenceDiagram
 
 ### 为什么换
 
-- 传统栈锁把指向栈的指针塞进对象头，锁状态随时会改写对象头，想读原始 Mark Word 很麻烦（JDK-8291555）
+- 传统栈锁把指向栈的指针塞进对象头，锁状态随时会改写对象头，读取原始 Mark Word 要先判断锁状态，再到栈上或 monitor 里去找（JDK-8291555）
 - 传统栈锁会覆盖整个对象头，和紧凑对象头不兼容（JEP 450）
 
 ### 对象头布局
@@ -205,8 +205,8 @@ JDK 25 `markWord.hpp`，此时偏向位已经没有了：
 |---|---|
 | 24 | `LockingMode` 废弃 |
 | 24 | 新增诊断参数 `UseObjectMonitorTable`，默认关。**只有开启它**，轻量级锁膨胀前才会先自旋：最多 CAS 13 次，每次之间自旋时间指数增长（参数 `LightweightFastLockingSpins`，JDK 26 改名为 `FastLockingSpins`） |
-| 24 | 删除 `_Responsible` 线程，改为放锁时加一次内存屏障来保证不会没人被叫醒（JDK-8320318） |
-| 25 | ObjectMonitor 的 `_cxq` 和 `_EntryList` 两条队列合并成一条 `_entry_list`，唤醒顺序改成先来先叫醒（JDK-8343840） |
+| 24 | 删除 `_Responsible` 线程，改为释放锁时加一次内存屏障，保证不会出现无人唤醒（JDK-8320318） |
+| 25 | ObjectMonitor 的 `_cxq` 和 `_EntryList` 两条队列合并成一条 `_entry_list`，唤醒顺序改为先到先唤醒（JDK-8343840） |
 | 26 | `LockingMode` 被忽略，传统栈锁代码删除，只剩新实现 |
 
 ## 时期四：JDK 27，紧凑对象头 + ObjectMonitorTable
@@ -243,11 +243,11 @@ flowchart TB
   OLD ~~~ NEW
 ```
 
-表是按对象的 hash 查的。对象还没算过 hash 的话，膨胀前会先给它装上一个（`ObjectSynchronizer::inflate_fast_locked_object`）。所以严格说，膨胀可能会补写对象头里的 hash，但不会把原内容挤走。
+表按对象的 hash 查找。对象如果还没有 hash，膨胀前会先为它生成并写入对象头（`ObjectSynchronizer::inflate_fast_locked_object`）。因此严格来说，膨胀可能补写对象头中的 hash，但不会覆盖原内容。
 
 为什么要把 monitor 挪进表里：
 
-- 以前膨胀后，monitor 地址会把对象头原内容挤走。紧凑对象头里类型指针也在 Mark Word 里，挤走以后连"这个对象是什么类型"都要绕到 monitor 去读，容易出错（JDK-8315884）
+- 以前膨胀后，monitor 地址会覆盖对象头的原内容。紧凑对象头的类型指针也在 Mark Word 里，被覆盖后连"这个对象是什么类型"都要经过 monitor 才能读到，容易出错（JDK-8315884）
 - 紧凑对象头必须配合 monitor 表才能工作；而且始终用表，还能腾出 Mark Word 的位给 GC 等其他用途（JDK-8379782）
 - JDK 27 重写了表的实现，让 JIT 编译出的代码也能直接查表，改善了开启紧凑对象头后的性能倒退（JDK-8373595）
 
@@ -269,7 +269,7 @@ JDK 28（开发中）计划删掉 `UseObjectMonitorTable` 参数，以后 monito
 | 轻量级锁怎么改对象头 | 整个换成栈上指针 | 同左 | 只改最低 2 位 | 同左 |
 | 轻量级锁归谁 | 看指针落在谁的栈上 | 同左 | 线程自己的 lock-stack | 同左 |
 | 轻量级锁重入 | 放空的 Lock Record | 同左 | 连续重入再压一次 | 同左 |
-| 轻量级锁抢不到 | 直接膨胀 | 同左 | 默认直接膨胀（开启 ObjectMonitorTable 才先自旋） | 先自旋，最多 CAS 8 次 |
+| 轻量级锁竞争失败 | 直接膨胀 | 同左 | 默认直接膨胀（开启 ObjectMonitorTable 才先自旋） | 先自旋，最多 CAS 8 次 |
 | monitor 地址存哪 | 对象头 | 对象头 | 对象头（24 起可选表） | ObjectMonitorTable |
 | 等锁队列 | `_cxq` + `_EntryList` | 同左 | 24 同左，25 起合并成 `_entry_list` | `_entry_list` |
 | monitor 持有者 | 线程指针或 Lock Record 地址 | 同左 | 23 线程指针，24 起线程 ID | 线程 ID |
@@ -280,7 +280,7 @@ JDK 28（开发中）计划删掉 `UseObjectMonitorTable` 参数，以后 monito
 |---|---|
 | synchronized 一定会经过偏向锁 | JDK 15 起默认没有偏向锁，JDK 19 起连参数都没了 |
 | 无锁时同一线程反复进入，相当于偏向锁 | 轻量级锁每次进出都要 CAS，偏向锁只有第一次 CAS |
-| 轻量级锁先自旋一段时间，再膨胀 | JDK 26 及以前的默认配置下，轻量级锁抢不到直接膨胀，自旋发生在膨胀后的 ObjectMonitor 里；JDK 27 默认开启 ObjectMonitorTable 后，才会先自旋几次 |
+| 轻量级锁先自旋一段时间，再膨胀 | JDK 26 及以前的默认配置下，轻量级锁竞争失败直接膨胀，自旋发生在膨胀后的 ObjectMonitor 里；JDK 27 默认开启 ObjectMonitorTable 后，才会先自旋几次 |
 | 锁只能升级，不能降级 | 空闲的 monitor 会被后台线程回收，对象恢复成无锁 |
 | 对象头里记录了持有锁的线程 | 只有偏向锁记线程指针。传统轻量级锁记栈地址，新轻量级锁什么都不记 |
 
